@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Index de imágenes y GIFs — VortexLove/assets</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; padding: 20px; background: #0f1720; color: #e6eef8; }
+    header { margin-bottom: 20px; }
+    h1 { margin: 0 0 8px 0; font-size: 1.6rem; }
+    p { margin: 0 0 12px 0; color: #9fb2cf; }
+    #gallery { display: grid; grid-template-columns: repeat(auto-fill,minmax(160px,1fr)); gap: 12px; }
+    .card { background: rgba(255,255,255,0.03); border-radius: 8px; padding: 8px; text-align: center; }
+    img { max-width: 100%; height: 120px; object-fit: contain; background: #081223; border-radius: 6px; }
+    a { color: #7dd3fc; text-decoration: none; word-break: break-all; display:block; margin-top:6px; font-size:0.85rem; }
+    .meta { font-size: 0.8rem; color: #9fb2cf; margin-top:6px; }
+    footer { margin-top: 18px; color: #87a6c8; font-size: 0.9rem; }
+    #loading { color: #9fb2cf; }
+    .error { color: #ffb4b4; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Index de imágenes y GIFs</h1>
+    <p>Listado automático de archivos de imagen (.png, .jpg, .jpeg, .gif, .webp, .svg) en el repositorio VortexLove/assets</p>
+    <div id="loading">Cargando archivos...</div>
+  </header>
+
+  <main>
+    <section id="gallery" aria-live="polite"></section>
+    <div id="error" class="error" role="alert"></div>
+  </main>
+
+  <footer>
+    Generado dinámicamente desde la API pública de GitHub. Si tienes muchas imágenes o la API rate-limit impide listar todos los archivos, considera usar un token o generar un index estático (README o JSON) en el repo.
+  </footer>
+
+  <script>
+    // Configuración: actualiza si necesitas otro owner/repo/path
+    const OWNER = "VortexLove";
+    const REPO = "assets";
+    // Si quieres indexar solo una carpeta concreta, cambia PATH (sin slash inicial), o déjalo vacío para todo el repo
+    const PATH = ""; // por ejemplo: "images"
+
+    // Extensiones de imagen a incluir
+    const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
+
+    // Si quieres usar un token personal para evitar rate limits, ponlo aquí (no recomendado en público).
+    const GITHUB_TOKEN = ""; // deja vacío para peticiones anónimas
+
+    const gallery = document.getElementById("gallery");
+    const loading = document.getElementById("loading");
+    const errorEl = document.getElementById("error");
+
+    async function fetchAllFiles(path = "") {
+      // Usamos la API de contenidos y luego navegamos recursivamente.
+      // Para grandes repositorios puede ser mejor usar la API de Git trees con recursive=1.
+      try {
+        // Primer intento: obtener árbol completo vía Git Trees (más eficiente)
+        const refResp = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/git/refs/heads/main`, authHeader());
+        if (!refResp.ok) {
+          // fallback: intentar sin especificar rama (usa la default branch)
+        }
+        const refData = await refResp.json();
+        const sha = refData?.object?.sha || refData?.sha;
+        if (!sha) {
+          // Fallback: pedir repo para obtener default_branch
+          const repoResp = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}`, authHeader());
+          if (!repoResp.ok) throw new Error("No se pudo obtener información del repo.");
+          const repoData = await repoResp.json();
+          const branch = repoData?.default_branch || "main";
+          const ref2 = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/git/refs/heads/${branch}`, authHeader());
+          if (!ref2.ok) throw new Error("No se pudo obtener la rama por defecto.");
+          const ref2data = await ref2.json();
+          const sha2 = ref2data?.object?.sha;
+          return fetchTree(sha2);
+        }
+        return fetchTree(sha);
+      } catch (err) {
+        // Como fallback robusto, usar la lista de contenidos recursiva por carpeta (cuando PATH está vacío esto no será recursivo).
+        console.warn("Falling back to contents API due to:", err);
+        return fetchContentsRecursively(PATH || "");
+      }
+    }
+
+    function authHeader() {
+      return GITHUB_TOKEN ? { headers: { Authorization: "token " + GITHUB_TOKEN } } : {};
+    }
+
+    async function fetchTree(sha) {
+      // Obtener el árbol recursivo
+      const treeResp = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/git/trees/${sha}?recursive=1`, authHeader());
+      if (!treeResp.ok) throw new Error("No se pudo recuperar el árbol del repo.");
+      const treeData = await treeResp.json();
+      let files = treeData.tree
+        .filter(item => item.type === "blob")
+        .map(item => item.path);
+
+      if (PATH) {
+        files = files.filter(p => p.startsWith(PATH + "/") || p === PATH);
+      }
+
+      return files;
+    }
+
+    async function fetchContentsRecursively(path) {
+      // recorre carpetas usando /contents API
+      const results = [];
+      async function walk(p) {
+        const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${p}`;
+        const resp = await fetch(url, authHeader());
+        if (!resp.ok) throw new Error("Error al listar contenidos: " + (await resp.text()));
+        const data = await resp.json();
+        if (Array.isArray(data)) {
+          for (const item of data) {
+            if (item.type === "file") results.push(item.path);
+            else if (item.type === "dir") await walk(item.path);
+          }
+        } else if (data && data.type === "file") {
+          results.push(data.path);
+        }
+      }
+      await walk(path);
+      return results;
+    }
+
+    function isImageFile(path) {
+      const lower = path.toLowerCase();
+      return IMAGE_EXTENSIONS.some(ext => lower.endsWith(ext));
+    }
+
+    function rawUrlFor(path) {
+      return `https://raw.githubusercontent.com/${OWNER}/${REPO}/main/${encodeURI(path)}`;
+    }
+
+    function createCard(path) {
+      const card = document.createElement("div");
+      card.className = "card";
+
+      const img = document.createElement("img");
+      img.alt = path;
+      img.loading = "lazy";
+      img.src = rawUrlFor(path);
+
+      const a = document.createElement("a");
+      a.href = `https://github.com/${OWNER}/${REPO}/blob/main/${encodeURI(path)}`;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = path;
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = path.split("/").pop();
+
+      card.appendChild(img);
+      card.appendChild(a);
+      card.appendChild(meta);
+      return card;
+    }
+
+    (async function init() {
+      try {
+        const allFiles = await fetchAllFiles(PATH);
+        const images = allFiles.filter(isImageFile);
+
+        if (!images.length) {
+          loading.textContent = "No se encontraron imágenes o GIFs en el repo (o la rama default no es 'main').";
+          return;
+        }
+
+        loading.style.display = "none";
+
+        // Ordenamos por carpeta y nombre
+        images.sort((a,b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+        for (const p of images) {
+          const card = createCard(p);
+          gallery.appendChild(card);
+        }
+      } catch (err) {
+        console.error(err);
+        loading.style.display = "none";
+        errorEl.textContent = "Error al obtener la lista de archivos: " + (err.message || err);
+      }
+    })();
+  </script>
+</body>
+</html>
